@@ -1,0 +1,153 @@
+---
+title: "TidyTuesdayTDF"
+author: "Jeff Grayum"
+date: "10/27/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tidytuesdayR)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+#install.packages("survival")
+library(survival)
+library(broom)
+library(janitor)
+theme_set(theme_light())
+```
+
+
+```{r}
+tuesdata <- tidytuesdayR::tt_load('2020-04-07')
+
+```
+
+```{r}
+tdf_winners <- tuesdata$tdf_winners %>%
+  mutate(year = year(start_date)) %>%
+  mutate(speed = distance / time_overall)
+
+tdf_winners %>%
+  count(birth_country, sort = TRUE) %>%
+  mutate(birth_country = fct_reorder(birth_country, n)) %>%
+  ggplot(aes(n, birth_country)) +
+  geom_col() +
+  labs(title = "What countries were the most Tour de France winners born in?", x = "", y = "")
+
+tdf_winners %>%
+  count(winner_name, birth_country, sort = TRUE)
+
+#How has the age distribution of winners changed over time? (noticed decade is counted using TRUNCATED division!!! (1903 % / % 10 = 190))
+tdf_winners %>%
+  group_by(decade = 10 * (year %/% 10)) %>%
+  summarize(winner_age = mean(age),
+            winner_height = mean(height, na.rm = TRUE),
+            winner_weight = mean(weight, na.rm = TRUE)) %>%
+  ggplot(aes(decade, winner_age)) +
+  geom_line() +
+  expand_limits(y = 0)
+
+tdf_winners %>%
+  group_by(decade = 10 * (year %/% 10)) %>%
+  summarize(winner_age = mean(age),
+            winner_height = mean(height, na.rm = TRUE),
+            winner_weight = mean(weight, na.rm = TRUE)) %>%
+  ggplot(aes(decade, winner_height)) +
+  geom_line() +
+  expand_limits(y = 0)
+
+tdf_winners %>%
+  group_by(decade = 10 * (year %/% 10)) %>%
+  summarize(winner_age = mean(age),
+            winner_height = mean(height, na.rm = TRUE),
+            winner_weight = mean(weight, na.rm = TRUE)) %>%
+  ggplot(aes(decade, winner_weight)) +
+  geom_line() +
+  expand_limits(y = 0)
+
+#Doing same as above, but with across()
+by_decade <- tdf_winners %>%
+  group_by(decade = 10 * (year %/% 10)) %>%
+  summarize(across(.cols = c(age, height, weight, time_margin, speed), mean, na.rm = TRUE)) %>%
+  view()
+
+
+by_decade %>%
+  filter(decade >= 1910) %>%
+  ggplot(aes(decade, time_margin * 60)) +
+  geom_line() +
+  labs(x = "Decade", y = "Average margin of victory (minutes)", title = "Tour de France races have been getting more competetive over time")
+
+by_decade %>%
+  ggplot(aes(decade, speed)) +
+  geom_line() +
+  labs(x = "Decade", y = "Average speed of winner (km/hr)", title = "Tour de France races have been getting faster over time") +
+  expand_limits(y = 0)
+
+#Let's do a survival analysis!
+
+surv_model <- tdf_winners %>%
+  distinct(winner_name, .keep_all = TRUE) %>%
+  transmute(winner_name,
+            birth_year = year(born),
+            death_year = year(died),
+            dead = as.integer(!is.na(death_year))) %>%
+  mutate(age_at_death = coalesce(death_year, 2020) - birth_year) %>%
+  survfit(Surv(age_at_death, dead) ~ 1, data = .)
+
+
+glance(surv_model)
+```
+
+```{r}
+stage_data <- tuesdata$stage_data %>%
+view()
+
+stages_joined <- stage_data %>%
+  extract(stage_results_id, "stage", "stage-(.*)") %>%
+  inner_join(tdf_stages, by = c("year", "stage")) %>%
+  mutate(rank = as.integer(rank)) %>%
+  group_by(year, stage) %>%
+  mutate(finishers = sum(!is.na(rank))) %>%
+  ungroup() %>%
+  mutate(percentile = 1 - rank / finishers) %>%
+  view()
+  
+
+tdf_stages <- tuesdata$tdf_stages %>%
+  clean_names() %>%
+  mutate(year = year(date),
+         stage = as.character(stage),
+         rank = as.integer(rank)) 
+ 
+ 
+stages_joined %>%
+  filter(stage == "2") %>%
+  group_by(winner_country) %>%
+  summarize(stages = n(),
+            median_percentile = median(percentile, na.rm = TRUE)) %>%
+  arrange(desc(stages))
+
+stages_joined %>%
+  count(year, stage) %>%
+  ggplot(aes(n)) +
+  geom_histogram()
+
+total_points <- stages_joined %>%
+  grouped_by(year, stage, rider) %>%
+  summarize(points = sum(points, na.rm = TRUE)) %>%
+  view()
+  
+
+
+```
+
+
